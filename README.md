@@ -2,6 +2,54 @@
 
 ## Team: Legend Toss
 
+> **빠른 시작**: 바로 실행하고 싶다면 [QUICKSTART.md](QUICKSTART.md)를 참고하세요 (5분 내 시작 가능!)
+
+---
+
+## 0. 환경 설정 및 설치
+
+### 0.1 요구사항
+
+- **Python**: 3.9 이상 (권장: 3.10 또는 3.11)
+- **GPU**: NVIDIA GPU with CUDA 12.x (선택, 하지만 강력 권장)
+- **RAM**: 최소 16GB (32GB 이상 권장)
+- **저장공간**: 최소 50GB
+
+### 0.2 패키지 설치
+
+```bash
+# 1. 기본 패키지 설치 (필수)
+pip install -r requirements.txt
+
+# 2. GPU 가속 패키지 설치 (선택, GPU 환경에서 권장)
+pip install -r requirements-gpu.txt
+
+# 3. 개발 도구 설치 (선택)
+pip install -r requirements-dev.txt
+```
+
+**주요 패키지:**
+- **데이터 처리**: numpy, pandas, polars, pyarrow
+- **머신러닝**: xgboost, catboost, scikit-learn
+- **딥러닝**: torch (PyTorch)
+- **실험 추적**: wandb
+- **GPU 가속**: RAPIDS (cuDF, cuML 등)
+
+상세한 설치 가이드는 [README_SETUP.md](README_SETUP.md)를 참고하세요.
+
+### 0.3 W&B 설정 (선택)
+
+```bash
+# W&B 로그인 (실험 추적용)
+wandb login
+
+# 또는 환경변수로 설정
+export WANDB_API_KEY="your_api_key_here"
+
+# W&B 사용하지 않으려면
+export WANDB_MODE=disabled
+```
+
 ---
 
 ## 1. Validation (검증 전략)
@@ -499,114 +547,224 @@ wandb.log({
   - Deep learning 모델보다 feature engineering 의존도 높음
 - **적용 시나리오**: 빠른 실험, 안정적인 baseline, 딥러닝 모델과 앙상블
 
-#### CatBoost Hybrid 변형 (Modular Feature Engineering)
+#### CatBoost Hybrid 변형 (Advanced Feature Engineering Pipeline)
 
-본 프로젝트는 향상된 feature engineering을 위한 **모듈화된 접근법**도 개발했습니다 (`train/catboost_hybrid/`).
+본 프로젝트는 **설정 기반 고급 feature engineering 파이프라인**을 독립 모듈로 개발했습니다 (`train/catboost_hybrid/`).
 
-**핵심 컴포넌트: `PolarsFeatureEngineer` 클래스** (train/catboost_hybrid/feature_engineering.py:10)
+**아키텍처: 2단계 Feature Engineering**
 
-이 클래스는 설정 기반(config-driven) 방식으로 세 가지 고급 feature engineering 기법을 제공합니다:
+```
+Input Data (Polars LazyFrame)
+  ↓
+1️⃣ Advanced Feature Engineering (catboost_hybrid.py:155)
+  - l_feat 계열 통계 (sum, mean, std, z-score)
+  - history 계열 트렌드 분석
+  - 시간 관련 feature (hour_block, is_morning/evening/weekend)
+  - 교차 feature (inventory×age/hour/gender)
+  - Frequency encoding
+  ↓
+2️⃣ PolarsFeatureEngineer (feature_engineering.py:10)
+  - Temporal features (cyclical encoding)
+  - Cross features (hash trick)
+  - Aggregation features (group statistics)
+  ↓
+Feature Caching (MD5 hash-based)
+  ↓
+CatBoost Training (5-Fold CV)
+```
 
-**1. Temporal Features (시간적 특징 강화)**
+**핵심 컴포넌트:**
+
+**1단계: Advanced Feature Engineering** (catboost_hybrid.py:155)
+
+```python
+def advanced_feature_engineering_polars(df: pl.DataFrame) -> pl.DataFrame:
+    # 1️⃣ 시간 관련 Feature
+    df = df.with_columns([
+        (pl.col("hour") // 4).cast(pl.Utf8).alias("hour_block"),  # 0-5시간 단위
+        ((pl.col("hour") >= 6) & (pl.col("hour") < 12)).cast(pl.Int8).alias("is_morning"),
+        ((pl.col("hour") >= 18) & (pl.col("hour") < 24)).cast(pl.Int8).alias("is_evening"),
+        pl.col("day_of_week").is_in([5, 6]).cast(pl.Int8).alias("is_weekend"),
+    ])
+
+    # 교차: day × hour
+    df = df.with_columns(
+        pl.concat_str([pl.col("day_of_week").cast(pl.Utf8),
+                       (pl.col("hour") // 4).cast(pl.Utf8)],
+                      separator="_").alias("day_hour_cross")
+    )
+
+    # 2️⃣ l_feat 계열 통계 (27개 feature → 11개 통계)
+    l_feats = [c for c in df.columns if c.startswith("l_feat_")]
+    df = df.with_columns([
+        pl.sum_horizontal(l_feats).alias("l_feat_sum"),
+        pl.mean_horizontal(l_feats).alias("l_feat_mean"),
+        pl.min_horizontal(l_feats).alias("l_feat_min"),
+        pl.max_horizontal(l_feats).alias("l_feat_max"),
+        # 표준편차 직접 계산 (안전한 방식)
+        (pl.mean_horizontal([pl.col(c)**2 for c in l_feats]) -
+         pl.mean_horizontal(l_feats)**2).sqrt().alias("l_feat_std"),
+        # Z-score (standardized max/min)
+        ((pl.col("l_feat_max") - pl.col("l_feat_mean")) /
+         (pl.col("l_feat_std") + 1e-6)).alias("l_feat_zmax"),
+        ((pl.col("l_feat_min") - pl.col("l_feat_mean")) /
+         (pl.col("l_feat_std") + 1e-6)).alias("l_feat_zmin"),
+    ])
+
+    # 3️⃣ history 계열 트렌드
+    if {"history_a_1", "history_a_3"} <= set(df.columns):
+        df = df.with_columns([
+            pl.mean_horizontal(hist_a).alias("hist_a_mean"),
+            (pl.col("history_a_1") - pl.col("history_a_3")).alias("hist_a_delta_13"),
+            (pl.col("history_a_1") / (pl.col("history_a_3") + 1e-6)).alias("hist_a_ratio_13"),
+            # 트렌드 방향 (-1: 하락, 0: 변화없음, 1: 상승)
+            pl.when((pl.col("history_a_1") - pl.col("history_a_3")) > 0).then(1)
+              .when((pl.col("history_a_1") - pl.col("history_a_3")) < 0).then(-1)
+              .otherwise(0).alias("history_a_trend")
+        ])
+
+    # 4️⃣ 교차 Feature (inventory 중심)
+    if {"inventory_id", "age_group"} <= set(df.columns):
+        df = df.with_columns([
+            pl.concat_str(["inventory_id", "age_group"], separator="_").alias("inv_age_cross"),
+            pl.concat_str(["inventory_id", "hour_block"], separator="_").alias("inv_hour_cross"),
+            pl.concat_str(["inventory_id", "gender"], separator="_").alias("inv_gender_cross")
+        ])
+
+    # 5️⃣ Frequency Encoding
+    for col in ["inventory_id", "age_group", "gender"]:
+        if col in df.columns:
+            freq = df.group_by(col).agg(pl.count().alias("freq"))
+            total = freq["freq"].sum()
+            freq = freq.with_columns((pl.col("freq") / total).alias(f"{col}_freq"))
+            df = df.join(freq.select([col, f"{col}_freq"]), on=col, how="left")
+
+    return df
+```
+
+**주요 기법:**
+- **차원 축소**: l_feat 27개 → 11개 통계량 (sum, mean, std, z-score 등)
+- **트렌드 분석**: history_a/b의 시간적 변화 패턴 (delta, ratio, direction)
+- **교차 feature**: inventory를 중심으로 한 다차원 조합
+- **Frequency encoding**: 카테고리별 출현 빈도를 연속형 변수로 변환
+
+**2단계: PolarsFeatureEngineer** (feature_engineering.py:10)
+
 ```python
 class PolarsFeatureEngineer:
     def apply_temporal_features(self, df: pl.DataFrame) -> pl.DataFrame:
-        # Hour binning (설정 가능한 구간)
-        df = df.with_columns([
-            pl.col("hour").cast(pl.Float32)
-            .map_elements(lambda x: np.digitize(x, bins), return_dtype=pl.Int32)
-            .alias("hour_period")
-        ])
-
-        # Weekend flag
-        df = df.with_columns([
-            (pl.col("day_of_week") >= 5).cast(pl.Int8).alias("is_weekend")
-        ])
-
-        # Cyclical encoding (sin/cos 변환)
+        # Cyclical encoding (시간의 주기성)
         df = df.with_columns([
             (pl.col("hour") * 2 * np.pi / 24).sin().alias("hour_sin"),
             (pl.col("hour") * 2 * np.pi / 24).cos().alias("hour_cos"),
         ])
-
+        # Hour binning (설정 가능한 구간: [0,6,12,18,24])
+        df = df.with_columns([
+            pl.col("hour").map_elements(
+                lambda x: np.digitize(x, bins), return_dtype=pl.Int32
+            ).alias("hour_period")
+        ])
         return df
 ```
-- **시간의 주기성 포착**: sin/cos 변환으로 23시와 0시의 유사성 학습
-- **유연한 구간화**: config.yaml에서 hour_bins 설정 가능
-- **주말 효과**: 주중/주말 행동 패턴 차이 명시적 표현
+- **시간의 주기성**: sin/cos 변환으로 23시와 0시의 유사성 학습
+- **유연한 구간화**: config.yaml에서 hour_bins 커스터마이징 가능
 
-**2. Cross Features (교차 특징)**
+**Feature Caching System** (catboost_hybrid.py:31)
+
 ```python
-def apply_cross_features(self, df: pl.DataFrame) -> pl.DataFrame:
-    # 예: gender × age_group, hour × inventory_id
-    for col1, col2 in pairs:
-        new_name = f"cross_{col1}_{col2}"
-        df = df.with_columns([
-            (pl.col(col1).cast(pl.Utf8) + "_" + pl.col(col2).cast(pl.Utf8))
-            .hash(seed=0)
-            .mod(num_buckets)  # Hash trick으로 메모리 절약
-            .alias(new_name)
-        ])
+def get_config_hash(cfg):
+    """설정의 해시값을 생성하여 캐시 키로 사용"""
+    config_str = json.dumps(cfg, sort_keys=True)
+    return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+def process_data_with_cache(cfg, data_type="train", force_reprocess=False):
+    """캐시를 활용한 데이터 처리"""
+    # 1️⃣ 캐시 확인 (MD5 hash 기반)
+    if not force_reprocess:
+        cached_df = load_engineered_features(cfg, data_type)
+        if cached_df is not None:
+            return cached_df  # 캐시 히트!
+
+    # 2️⃣ Feature Engineering 수행
+    df = pl.read_parquet(data_path)
+    df = advanced_feature_engineering_polars(df)
+    engineer = PolarsFeatureEngineer(cfg)
+    df = engineer.transform(df)
+
+    # 3️⃣ 결과 저장
+    save_engineered_features(df, cfg, data_type)
+
     return df
 ```
-- **Hash trick**: 무한한 조합을 고정된 버킷 수(default: 100,000)로 매핑
-- **메모리 효율**: One-hot encoding 대비 공간 절약
-- **설정 기반**: config.yaml에서 교차할 feature 쌍 지정
 
-**3. Aggregation Features (집계 특징)**
-```python
-def apply_aggregation_features(self, df: pl.DataFrame) -> pl.DataFrame:
-    # feat_a, feat_b 등 그룹별 통계
-    for group_name, group_cfg in groups.items():
-        cols = self._get_feature_columns(group_name)
+**캐싱 메커니즘:**
+- **MD5 해시 기반**: config.yaml 설정이 바뀌면 자동으로 재계산
+- **Parquet 저장**: `cache/train_fe_{hash}.parquet` 형식으로 저장
+- **속도 향상**: 2회차 실행부터 feature engineering 건너뛰기 (~30초 → 즉시)
 
-        # 통계량 계산
-        exprs.append(
-            pl.concat_list([pl.col(c).cast(pl.Float32) for c in cols])
-            .list.mean().alias(f"{group_name}_mean")
-        )
-        # std, max, min, sum도 가능
+**config.yaml 설정 예시**
 
-    return df.with_columns(exprs)
-```
-- **그룹 통계**: feat_a_1~feat_a_N → feat_a_mean, feat_a_std 등
-- **차원 축소**: 여러 관련 feature를 소수의 통계량으로 압축
-
-**설정 기반 접근법의 장점**
-
-`config.yaml`에서 모든 feature engineering 설정을 관리:
 ```yaml
+# CatBoost Parameters
+catboost:
+  iterations: 4000
+  learning_rate: 0.03
+  depth: 10
+  class_weights: [1, 51.4]  # Imbalance 대응
+  early_stopping_rounds: 300
+  task_type: "GPU"
+
+# Feature Engineering
 feature_engineering:
   enabled: true
   temporal:
     enabled: true
     hour_bins: [0, 6, 12, 18, 24]
-    weekend_flag: true
-    time_of_day_features: true  # sin/cos encoding
-  cross_features:
-    enabled: true
-    pairs:
-      - ["gender", "age_group"]
-      - ["hour", "inventory_id"]
-    num_buckets: 100000
+    time_of_day_features: true
   aggregations:
     enabled: true
     groups:
-      feat_a:
-        stats: ["mean", "std", "max", "min"]
+      feat_a: {stats: [sum, mean, std]}
+      history_a: {stats: [mean, std, max, min]}
+
+# Training
+training:
+  n_folds: 5
+  seed: 42
+  force_reprocess: false  # true면 캐시 무시
 ```
 
-**실제 적용**
+**실행 모드**
 
-이 모듈화된 접근법은 `xgboost_catboost.py` 스크립트에 인라인 형태로 통합되었습니다.
+```bash
+# CV (5-fold 교차 검증)
+python catboost_hybrid.py --mode cv
 
-CatBoost Hybrid 변형의 제출 파일(`submissions/catboost_hybrid.csv`)은 이러한 강화된 feature engineering을 포함한 모델로 생성되었으며, 최종 앙상블에서 6.67%의 기여도를 차지합니다.
+# Train (전체 데이터 학습)
+python catboost_hybrid.py --mode train
 
-**결론**:
-- **모듈화**: 재사용 가능한 feature engineering 컴포넌트
-- **설정 기반**: 코드 수정 없이 실험 가능
-- **Polars 네이티브**: 고속 처리 유지
-- **확장성**: 새로운 feature 유형 쉽게 추가 가능
+# Inference (추론)
+python catboost_hybrid.py --mode inference --model-path models/catboost_fold1.cbm
+
+# All (CV + Train + Inference 전체 파이프라인)
+python catboost_hybrid.py --mode all
+
+# 캐시 무시하고 재처리
+python catboost_hybrid.py --mode cv --force-reprocess
+```
+
+**최종 성능 및 적용**
+
+CatBoost Hybrid의 제출 파일(`submissions/catboost_hybrid.csv`)은:
+- 2단계 feature engineering 파이프라인 적용
+- 5-fold CV로 검증된 robust한 예측
+- 최종 앙상블에서 **6.67%** 기여 (Tree 계열의 1/3)
+
+**장점:**
+- **모듈화**: 재사용 가능한 독립적인 파이프라인
+- **설정 기반**: config.yaml만 수정하면 다양한 실험 가능
+- **캐싱**: 반복 실험 시 feature engineering 시간 절약
+- **Polars 네이티브**: 대용량 데이터도 고속 처리
 
 ---
 
@@ -1036,6 +1194,12 @@ df = lf.collect(engine="streaming")          # Streaming execution
 
 ```
 team_legend_toss/
+├── requirements.txt             # 기본 패키지 (필수)
+├── requirements-gpu.txt         # GPU 가속 패키지 (선택)
+├── requirements-dev.txt         # 개발 도구 (선택)
+├── README.md                    # 본 기술 보고서
+├── README_SETUP.md              # 상세 설치 가이드
+├── QUICKSTART.md                # 빠른 시작 가이드 (⚡ 추천)
 ├── data/
 │   ├── train.parquet
 │   ├── test.parquet
@@ -1082,11 +1246,36 @@ python train/xgboost_catboost.py
 # - outputs/{run_name}/catboost_fold*.cbm (모델 가중치)
 # - W&B 로그: https://wandb.ai/your-project/CTR_Polars_OOC_Stack
 
-# 2. Wide & Deep CTR (6 epochs, full training, ~4시간)
+# 2. CatBoost Hybrid (모듈화된 Feature Engineering, ~30분)
+cd train/catboost_hybrid
+python catboost_hybrid.py --config config.yaml --mode cv
+# 또는 전체 파이프라인 (CV + 학습 + 추론)
+python catboost_hybrid.py --config config.yaml --mode all
+# 출력:
+# - models/catboost_hybrid/catboost_fold*.cbm
+# - submissions/catboost_hybrid.csv
+# - cache/ (feature engineering 캐시)
+
+# 3. Wide & Deep CTR (6 epochs, full training, ~4시간)
 python train/widectr.py
 
-# 3. DIN (5-Fold CV, early stopping, ~2-3시간)
+# 4. DIN (5-Fold CV, early stopping, ~2-3시간)
 python train/din.py
+```
+
+**CatBoost Hybrid 실행 옵션:**
+```bash
+# CV만 실행 (5-fold 교차 검증)
+python catboost_hybrid.py --mode cv
+
+# 전체 데이터로 학습
+python catboost_hybrid.py --mode train
+
+# 추론만 실행 (사전 학습된 모델 사용)
+python catboost_hybrid.py --mode inference --model-path ../../models/catboost_hybrid/catboost_fold1.cbm
+
+# Feature engineering 캐시 무시하고 재처리
+python catboost_hybrid.py --mode cv --force-reprocess
 ```
 
 #### 추론
@@ -1128,7 +1317,7 @@ model.load_model("outputs/{run_name}/catboost_fold1.cbm")
 | 측면 | 전략 | 근거 |
 |------|------|------|
 | **Validation** | DIN: 5-Fold CV<br>GBDT: 5-Fold CV<br>Wide&Deep: Full Training | 안정성 vs 효율성 trade-off<br>1 epoch = 40분 시간 제약 |
-| **Feature Engineering** | Polars Streaming (GBDT)<br>Temporal, Interaction, Aggregation | 10-30초 고속 처리 (~20배 빠름)<br>다양한 각도에서 사용자 행동 모델링 |
+| **Feature Engineering** | Polars Streaming (GBDT)<br>2단계 Pipeline (CatBoost Hybrid)<br>Temporal, Interaction, Aggregation<br>Feature Caching (MD5 hash) | 10-30초 고속 처리 (~20배 빠름)<br>다양한 각도에서 사용자 행동 모델링<br>반복 실험 시 캐시로 즉시 로드 |
 | **Model Architecture** | DIN: Attention<br>GBDT: XGBoost + CatBoost<br>Wide&Deep: Cross + LSTM | 광고-이력 관계 학습<br>자동 feature interaction<br>저차+고차 feature crossing |
 | **Memory Optimization** | DIN: Lazy Loading + Dynamic Padding<br>GBDT: Polars Out-of-Core | 대용량 sequence 데이터 처리 (40GB→1GB)<br>Streaming mode로 메모리 절약 |
 | **Regularization** | GBDT: Noise Injection (σ=1e-5)<br>DNN: Dropout, BatchNorm | Data augmentation으로 과적합 방지<br>신경망 정규화 |
@@ -1150,13 +1339,17 @@ model.load_model("outputs/{run_name}/catboost_fold1.cbm")
    - OOF score를 통한 신뢰할 수 있는 성능 추정
    - **강점**: Sequence 모델링, 사용자별 맞춤 광고 추천
 
-2. **XGBoost + CatBoost Ensemble**:
+2. **XGBoost + CatBoost Ensemble** (+ CatBoost Hybrid 변형):
    - Polars streaming으로 **10-30초 만에 feature engineering** 완료 (Pandas 대비 ~20배 빠름)
+   - **CatBoost Hybrid**: 2단계 feature engineering pipeline
+     - 1단계: Advanced FE (l_feat 통계, history 트렌드, 교차 feature, frequency encoding)
+     - 2단계: PolarsFeatureEngineer (cyclical encoding, hash trick, group aggregations)
+     - **Feature Caching**: MD5 hash 기반 캐싱으로 반복 실험 시 즉시 로드
    - 5-Fold CV + 성능 기반 자동 가중치로 **검증된 성능**
    - Noise injection (σ=1e-5)으로 일반화 능력 향상
    - 모델 가중치 저장으로 **재학습 없이 추론 가능**
    - W&B 자동 실험 추적으로 **재현성 보장**
-   - **강점**: 빠른 학습 속도 (~30분), 안정적인 baseline, 자동 feature interaction
+   - **강점**: 빠른 학습 속도 (~30분), 안정적인 baseline, 자동 feature interaction, 모듈화된 FE 파이프라인
 
 3. **Wide & Deep CTR**:
    - Cross Network와 LSTM으로 feature crossing과 sequence 패턴 학습
@@ -1172,12 +1365,15 @@ model.load_model("outputs/{run_name}/catboost_fold1.cbm")
 - Streaming mode로 대용량 데이터 처리
 
 **다양한 각도의 사용자 행동 모델링**:
-- **Temporal**: 시간대별 사용자 행동 패턴 (출퇴근, 심야 등)
+- **Temporal**: 시간대별 사용자 행동 패턴 (출퇴근, 심야 등), Cyclical encoding (sin/cos)
 - **l_feat_14**: 광고 ID와 사용자 이력의 유사도
+- **l_feat 통계** (CatBoost Hybrid): 27개 → 11개 통계량 (sum, mean, std, z-score)
 - **Sequence**: 길이, 다양성, top events 포함 여부
 - **History**: 과거 행동 통계 (history_a_1이 핵심), outlier clipping
-- **Interaction**: Age×Hour, History×SeqLength
-- **Group Aggregation**: feat_a~e 통계량 (mean, max, min, std)
+- **History 트렌드** (CatBoost Hybrid): delta, ratio, direction (-1/0/1)
+- **Interaction**: Age×Hour, History×SeqLength, Inventory×Age/Hour/Gender
+- **Frequency Encoding**: 카테고리별 출현 빈도 연속형 변환
+- **Group Aggregation**: feat_a~e 통계량 (mean, max, min, std, sum)
 
 ### 9.3 메모리 최적화
 
@@ -1230,11 +1426,11 @@ model.load_model("outputs/{run_name}/catboost_fold1.cbm")
 3. **DIN 5-fold** → Attention 메커니즘, 검증된 성능
 4. **Wide & Deep** → 전체 데이터 활용
 
-**실행 시간**:
-- GBDT: ~30분 (가장 빠름) ⚡
-- DIN: ~2-3시간
-- Wide & Deep: ~4시간
-- **Total: ~7시간** (병렬 실행 시 ~4시간)
+**실행 시간**: RTX 6000 기준
+- GBDT (XGBoost + CatBoost): ~60분 (가장 빠름) ⚡
+- CatBoost Hybrid: ~30분 (첫 실행), ~20분 (캐시 사용 시)
+- DIN: ~8시간
+- Wide & Deep: ~8시간
 
 ---
 

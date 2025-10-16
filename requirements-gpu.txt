@@ -1,0 +1,28 @@
+# GPU-accelerated Computing with NVIDIA RAPIDS (CUDA 12)
+# Install these packages for GPU acceleration (optional but recommended)
+#
+# Installation command:
+# pip install -r requirements.txt
+# pip install -r requirements-gpu.txt --extra-index-url=https://pypi.nvidia.com
+#
+# Note: Requires NVIDIA GPU with CUDA 12.x installed
+
+--extra-index-url https://pypi.nvidia.com
+
+# RAPIDS Core Libraries
+cudf-cu12==25.10.*
+dask-cudf-cu12==25.10.*
+cuml-cu12==25.10.*
+cugraph-cu12==25.10.*
+cucim-cu12==25.10.*
+
+# RAPIDS Supporting Libraries
+pylibraft-cu12==25.10.*
+raft-dask-cu12==25.10.*
+cuvs-cu12==25.10.*
+
+# NetworkX with cuGraph backend
+nx-cugraph-cu12==25.10.*
+
+# RAPIDS Visualization
+cuxfilter-cu12==25.10.*

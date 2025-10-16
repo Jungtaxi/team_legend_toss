@@ -1,0 +1,286 @@
+_wandb:
+    value:
+        cli_version: 0.22.2
+        e:
+            10bbbtiznb45icci1z6tajhx72804ce0:
+                args:
+                    - --config
+                    - config.yaml
+                codePath: baseline/catboost/catboost_hybrid.py
+                codePathLocal: catboost_hybrid.py
+                cpu_count: 6
+                cpu_count_logical: 12
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "253055008768"
+                        used: "51570036736"
+                email: hayeon0808@swu.ac.kr
+                executable: /usr/bin/python3
+                git:
+                    commit: bf9f693ea5cacec4e618ce67f2a787c53aa5347a
+                    remote: https://github.com/Jungtaxi/mlchallenge.git
+                gpu: NVIDIA A100-SXM4-80GB
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100-SXM4-80GB
+                      uuid: GPU-151d99c8-6bf9-cc5a-a233-0e5a293ac58c
+                host: a4df791ef0fa
+                memory:
+                    total: "179370299392"
+                os: Linux-6.6.97+-x86_64-with-glibc2.35
+                program: /content/drive/MyDrive/mlchallenge/baseline/catboost/catboost_hybrid.py
+                python: CPython 3.12.11
+                root: /content/drive/MyDrive/mlchallenge/baseline/catboost
+                startedAt: "2025-10-11T10:58:09.262521Z"
+                writerId: 10bbbtiznb45icci1z6tajhx72804ce0
+        m: []
+        python_version: 3.12.11
+        t:
+            "1":
+                - 5
+                - 6
+                - 7
+                - 53
+                - 105
+            "2":
+                - 5
+                - 6
+                - 7
+                - 53
+                - 105
+            "3":
+                - 2
+                - 16
+            "4": 3.12.11
+            "5": 0.22.2
+            "12": 0.22.2
+            "13": linux-x86_64
+catboost:
+    value:
+        class_weights:
+            - 1
+            - 51.4
+        depth: 10
+        early_stopping_rounds: 300
+        eval_metric: AUC
+        iterations: 4000
+        l2_leaf_reg: 4
+        learning_rate: 0.03
+        logging_level: Silent
+        task_type: GPU
+feature_engineering:
+    value:
+        aggregations:
+            enabled: true
+            groups:
+                feat_a:
+                    stats:
+                        - sum
+                        - mean
+                        - std
+                feat_b:
+                    stats:
+                        - sum
+                        - mean
+                feat_c:
+                    stats:
+                        - sum
+                        - mean
+                feat_d:
+                    stats:
+                        - sum
+                        - mean
+                feat_e:
+                    stats:
+                        - sum
+                        - mean
+                history_a:
+                    stats:
+                        - mean
+                        - std
+                        - max
+                        - min
+                history_b:
+                    stats:
+                        - mean
+                        - std
+                        - max
+                        - min
+                l_feat:
+                    stats:
+                        - mean
+                        - std
+                        - max
+                        - min
+                        - sum
+        cross_features:
+            enabled: false
+        enabled: true
+        frequency_encoding:
+            enabled: false
+        target_encoding:
+            enabled: false
+        temporal:
+            enabled: true
+            hour_bin_labels:
+                - dawn
+                - morning
+                - afternoon
+                - evening
+            hour_bins:
+                - 0
+                - 6
+                - 12
+                - 18
+                - 24
+            time_of_day_features: true
+            weekend_flag: true
+features:
+    value:
+        categorical:
+            - gender
+            - age_group
+            - inventory_id
+            - day_of_week
+            - hour
+        feat_a:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 13
+            - 14
+            - 15
+            - 16
+            - 17
+            - 18
+        feat_b:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+        feat_c:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+        feat_d:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+        feat_e:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+        history_a:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+        history_b:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 13
+            - 14
+            - 15
+            - 16
+            - 17
+            - 18
+            - 19
+            - 20
+            - 21
+            - 22
+            - 23
+            - 24
+            - 25
+            - 26
+            - 27
+            - 28
+            - 29
+            - 30
+        l_feat:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 13
+            - 14
+            - 15
+            - 16
+            - 17
+            - 18
+            - 19
+            - 20
+            - 21
+            - 22
+            - 23
+            - 24
+            - 25
+            - 26
+            - 27
+paths:
+    value:
+        model_dir: /content/drive/MyDrive/mlchallenge/baseline/catboost/models
+        submission_path: /content/drive/MyDrive/mlchallenge/baseline/catboost/submissions/catboost_baseline.csv
+        temp_dir: /tmp
+        test_path: /content/drive/MyDrive/mlchallenge/baseline/catboost/data/test.parquet
+        train_path: /content/drive/MyDrive/mlchallenge/baseline/catboost/data/train.parquet
+training:
+    value:
+        force_reprocess: true
+        n_folds: 5
+        seed: 42
+wandb:
+    value:
+        api_key: 
+        entity: macsprite
+        project: hy_nvidia_catboost
